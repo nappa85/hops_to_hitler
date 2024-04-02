@@ -1,4 +1,8 @@
-use std::{env, time::SystemTime};
+use std::{
+    env,
+    sync::atomic::{AtomicBool, Ordering},
+    time::SystemTime,
+};
 
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use once_cell::sync::Lazy;
@@ -8,6 +12,7 @@ use tokio::{select, sync::mpsc};
 use tracing::error;
 
 static LINK: Lazy<Selector> = Lazy::new(|| Selector::parse("a[href^='/wiki/'").unwrap());
+static LOG: AtomicBool = AtomicBool::new(true);
 
 fn is_wikipedia_url(url: &str) -> bool {
     if !url.starts_with("https://") {
@@ -90,6 +95,8 @@ async fn main() {
                 if let Some(Ok(Err(path))) = resolved {
                     let elapsed = start.elapsed().unwrap();
                     println!("Found Hitler in {} hop:\n{path:#?}\nduration: {}s", path.len(), elapsed.as_secs());
+                    // suppress shutdown logs
+                    LOG.store(false, Ordering::Relaxed);
                     break;
                 }
             }
@@ -115,20 +122,19 @@ async fn scrape(
     }
 
     let url = format!("{base_url}{relative_url}");
-    let Ok(response) = client
-        .get(url.as_str())
-        .send()
-        .await
-        .map_err(|e| error!("Error calling {url}: {e}"))
-    else {
+    let Ok(response) = client.get(url.as_str()).send().await.map_err(|e| {
+        if LOG.load(Ordering::Relaxed) {
+            error!("Error calling {url}: {e}");
+        }
+    }) else {
         return Ok(());
     };
 
-    let Ok(text) = response
-        .text()
-        .await
-        .map_err(|e| error!("Error reading {url}: {e}"))
-    else {
+    let Ok(text) = response.text().await.map_err(|e| {
+        if LOG.load(Ordering::Relaxed) {
+            error!("Error reading {url}: {e}");
+        }
+    }) else {
         return Ok(());
     };
 
